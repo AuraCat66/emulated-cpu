@@ -10,24 +10,45 @@ enum InstructionArgument {
 }
 
 #[derive(Clone, Copy, Debug)]
+/** Everytime a whole instruction is completed,
+its result will be pushed to the "res" register */
 enum CPUInstruction {
+    /** ADD instruction | reg/value + reg/value */
     Add(InstructionArgument, InstructionArgument),
+    /** SUB instruction | reg/value - reg/value */
     Sub(InstructionArgument, InstructionArgument),
+    /** MOV instruction | reg/value -> reg |
+    Moves the first value (or register's content) into another register */
     Mov(InstructionArgument, InstructionArgument),
+    /** GOTO instruction | Jump to the instruction at the provided index
+
+    Use with caution, it is powerful but can have side-effects
+    or can lead to undefined behavior */
+    Goto(usize),
+    /** IF instruction |
+    IF reg/value >= 1 then go to first address, ELSE go to second fallback address*/
+    If(InstructionArgument, usize, usize),
+    /** EQ instruction | reg/value == reg/value |
+    Compares the two values and returns 0 if the comparison is false, 1 if it's true */
+    Eq(InstructionArgument, InstructionArgument),
 }
 
 #[derive(Default)]
+/**
+    a/b = general-use register
+
+    res = used to store the result of the last instruction
+*/
 struct Registers {
     a: u16,
     b: u16,
-    // Read-only - The result of the last instruction
     res: u16,
 }
 struct CpuState {
     frequency: u32,
     cycle_duration: usize,
     instruction_cache: Vec<CPUInstruction>,
-    instruction_index: usize,
+    instruction_address: usize,
     registers: Registers,
 }
 impl CpuState {
@@ -36,7 +57,7 @@ impl CpuState {
             frequency: 0,
             cycle_duration: 0,
             instruction_cache: vec![],
-            instruction_index: 0,
+            instruction_address: 0,
             registers: Default::default(),
         };
         // Important for consistent pacing of CPU cycles
@@ -67,6 +88,10 @@ impl CpuState {
         }
     }
 
+    fn append_instructions(&mut self, instructions: &[CPUInstruction]) {
+        self.instruction_cache.append(&mut instructions.to_owned());
+    }
+
     fn fetch_argument_value(&self, argument: InstructionArgument) -> u16 {
         match argument {
             InstructionArgument::Register(register_name) => *self.get_register(register_name),
@@ -74,29 +99,27 @@ impl CpuState {
         }
     }
 
-    fn handle_instruction(&mut self, instruction: CPUInstruction) -> u16 {
+    fn handle_instruction(&mut self, instruction: CPUInstruction) {
         match instruction {
             CPUInstruction::Add(a, b) => {
                 let a = self.fetch_argument_value(a);
                 let b = self.fetch_argument_value(b);
 
-                a + b
+                self.registers.res = a + b
             }
             CPUInstruction::Sub(a, b) => {
                 let a = self.fetch_argument_value(a);
                 let b = self.fetch_argument_value(b);
 
-                a - b
+                self.registers.res = a - b
             }
             CPUInstruction::Mov(from, to) => {
                 let from = self.fetch_argument_value(from);
                 match to {
                     InstructionArgument::Register(register_name) => {
-                        if register_name != "res" {
-                            let register = self.get_register_mut(register_name);
+                        let register = self.get_register_mut(register_name);
 
-                            *register = from;
-                        }
+                        *register = from;
                     }
                     InstructionArgument::Value(_) => {
                         panic!(
@@ -104,8 +127,28 @@ impl CpuState {
                         )
                     }
                 };
+            }
+            CPUInstruction::Goto(new_address) => {
+                // if new_index >= self.instruction_cache.len() {
+                //     panic!("You tried to go to an instruction address that doesn't exist")
+                // } else {
+                self.instruction_address = new_address
+                // }
+            }
+            CPUInstruction::If(boolean, first_address, second_address) => {
+                let boolean = self.fetch_argument_value(boolean);
 
-                from
+                if boolean >= 1 {
+                    self.instruction_address = first_address;
+                } else {
+                    self.instruction_address = second_address;
+                }
+            }
+            CPUInstruction::Eq(first, second) => {
+                let first = self.fetch_argument_value(first);
+                let second = self.fetch_argument_value(second);
+
+                self.registers.res = (first == second) as u16
             }
         }
     }
@@ -114,20 +157,27 @@ impl CpuState {
         let mut total_instructions = 0;
 
         let start = std::time::Instant::now();
-        while self.instruction_index < self.instruction_cache.len() {
+        while self.instruction_address < self.instruction_cache.len() {
+            let instruction_start = std::time::Instant::now();
             // Simulate one CPU instruction
-            let current_instruction = self.instruction_cache[self.instruction_index];
-            self.registers.res = self.handle_instruction(current_instruction);
-            println!("{}: {}", self.instruction_index, self.registers.res);
+            let current_instruction = self.instruction_cache[self.instruction_address];
+            self.handle_instruction(current_instruction);
+            println!("{}: {}", self.instruction_address, self.registers.res);
 
-            // Increment the instruction index offset
-            self.instruction_index += 1;
+            match current_instruction {
+                CPUInstruction::Goto(_) | CPUInstruction::If(_, _, _) => {}
+                _ => {
+                    // Increment the instruction address
+                    self.instruction_address += 1;
+                }
+            }
+
             // Increment the total amount of instructions executed
             total_instructions += 1;
 
-            // Sleep to maintain cpu frequency
-            let elapsed = start.elapsed().as_millis_f64();
-            let expected = (self.instruction_index * self.cycle_duration) as f64;
+            // Sleep to maintain CPU frequency
+            let elapsed = instruction_start.elapsed().as_millis_f64();
+            let expected = self.cycle_duration as f64;
             if elapsed < expected {
                 let sleep_duration = expected - elapsed;
                 std::thread::sleep(std::time::Duration::from_millis(sleep_duration as u64));
@@ -141,24 +191,23 @@ impl CpuState {
 }
 
 fn main() {
-    let mut cpu = CpuState::new(10_000);
+    let mut cpu = CpuState::new(100);
 
     let instructions = vec![
-        CPUInstruction::Add(InstructionArgument::Value(1), InstructionArgument::Value(1)),
+        CPUInstruction::Add(
+            InstructionArgument::Register("a"),
+            InstructionArgument::Value(1),
+        ),
         CPUInstruction::Mov(
             InstructionArgument::Register("res"),
             InstructionArgument::Register("a"),
         ),
-        CPUInstruction::Sub(
-            InstructionArgument::Value(10),
-            InstructionArgument::Value(5),
-        ),
-        CPUInstruction::Sub(
-            InstructionArgument::Register("res"),
+        CPUInstruction::Eq(
             InstructionArgument::Register("a"),
+            InstructionArgument::Value(10),
         ),
+        CPUInstruction::If(InstructionArgument::Register("res"), 100, 0),
     ];
-
-    cpu.instruction_cache = instructions;
+    cpu.append_instructions(&instructions);
     cpu.execute();
 }
