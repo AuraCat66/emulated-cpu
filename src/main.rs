@@ -20,22 +20,24 @@ enum CPUInstruction {
     /** MOV instruction | reg/value -> reg |
     Moves the first value (or register's content) into another register */
     Mov(InstructionArgument, InstructionArgument),
-    /** GOTO instruction | Jump to the instruction at the provided index
+    /** GOTO instruction | Jumps to the instruction at the provided address and executes it
 
     Use with caution, it is powerful but can have side-effects
     or can lead to undefined behavior */
     Goto(usize),
     /** IF instruction |
-    IF reg/value >= 1 then go to first address, ELSE go to second fallback address*/
+    IF reg/value >= 1 then go to first address, ELSE go to second fallback address */
     If(InstructionArgument, usize, usize),
     /** EQ instruction | reg/value == reg/value |
     Compares the two values and returns 0 if the comparison is false, 1 if it's true */
     Eq(InstructionArgument, InstructionArgument),
+    /** EXIT instruction | Sets the status of the CPU to "exiting" */
+    Exit(),
 }
 
 #[derive(Default)]
 /**
-    a/b = general-use register
+    a, b = general-use register
 
     res = used to store the result of the last instruction
 */
@@ -44,12 +46,21 @@ struct Registers {
     b: u16,
     res: u16,
 }
+
+#[derive(PartialEq)]
+enum Status {
+    NotStarted,
+    Running,
+    Exiting,
+}
 struct CpuState {
     frequency: u32,
+    /** The minimum duration of an instruction cycle */
     cycle_duration: usize,
     instruction_cache: Vec<CPUInstruction>,
     instruction_address: usize,
     registers: Registers,
+    status: Status,
 }
 impl CpuState {
     fn new(frequency: u32) -> CpuState {
@@ -59,6 +70,7 @@ impl CpuState {
             instruction_cache: vec![],
             instruction_address: 0,
             registers: Default::default(),
+            status: Status::NotStarted,
         };
         // Important for consistent pacing of CPU cycles
         cpu_state.update_frequency(frequency);
@@ -128,13 +140,7 @@ impl CpuState {
                     }
                 };
             }
-            CPUInstruction::Goto(new_address) => {
-                // if new_index >= self.instruction_cache.len() {
-                //     panic!("You tried to go to an instruction address that doesn't exist")
-                // } else {
-                self.instruction_address = new_address
-                // }
-            }
+            CPUInstruction::Goto(new_address) => self.instruction_address = new_address,
             CPUInstruction::If(boolean, first_address, second_address) => {
                 let boolean = self.fetch_argument_value(boolean);
 
@@ -150,6 +156,7 @@ impl CpuState {
 
                 self.registers.res = (first == second) as u16
             }
+            CPUInstruction::Exit() => self.status = Status::Exiting,
         }
     }
 
@@ -157,7 +164,13 @@ impl CpuState {
         let mut total_instructions = 0;
 
         let start = std::time::Instant::now();
-        while self.instruction_address < self.instruction_cache.len() {
+        loop {
+            if self.instruction_address >= self.instruction_cache.len() {
+                break;
+            } else if let Status::Exiting = self.status {
+                break;
+            }
+
             let instruction_start = std::time::Instant::now();
             // Simulate one CPU instruction
             let current_instruction = self.instruction_cache[self.instruction_address];
