@@ -1,18 +1,28 @@
 #![feature(duration_millis_float)]
 
+use std::collections::HashMap;
+
+use memory::MemoryState;
+
+mod memory;
+
 #[derive(Debug)]
 enum Errors {}
 
 #[derive(Clone, Copy, Debug)]
 enum InstructionArgument {
+    /* Get a value from an address in the current sub stack */
+    Stack(u16),
+    /* Get a value from a register */
     Register(&'static str),
+    /* A hard-coded value */
     Value(u16),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 /** Everytime a whole instruction is completed,
 its result will be pushed to the "res" register */
-enum CPUInstruction {
+enum CpuInstruction {
     /** ADD instruction | reg/value + reg/value */
     Add(InstructionArgument, InstructionArgument),
     /** SUB instruction | reg/value - reg/value */
@@ -20,17 +30,28 @@ enum CPUInstruction {
     /** MOV instruction | reg/value -> reg |
     Moves the first value (or register's content) into another register */
     Mov(InstructionArgument, InstructionArgument),
-    /** GOTO instruction | Jumps to the instruction at the provided address and executes it
 
-    Use with caution, it is powerful but can have side-effects
-    or can lead to undefined behavior */
-    Goto(usize),
-    /** IF instruction |
-    IF reg/value >= 1 then go to first address, ELSE go to second fallback address */
-    If(InstructionArgument, usize, usize),
     /** EQ instruction | reg/value == reg/value |
     Compares the two values and returns 0 if the comparison is false, 1 if it's true */
     Eq(InstructionArgument, InstructionArgument),
+
+    /** FN function | A function */
+    Fn(&'static str),
+    Ret(),
+    Call(&'static str),
+
+    /** GOTO instruction | Jumps to the instruction at the provided address and executes it
+    Use with caution, it is powerful but can have side-effects
+    or can lead to undefined behavior */
+    Goto(u16),
+    /** IF instruction |
+    IF reg/value >= 1 then execute the first instruction, ELSE execute the second fall-back instruction */
+    If(
+        InstructionArgument,
+        Box<CpuInstruction>,
+        Box<CpuInstruction>,
+    ),
+
     /** EXIT instruction | Sets the status of the CPU to "exiting" */
     Exit(),
 }
@@ -41,36 +62,41 @@ enum CPUInstruction {
 
     res = used to store the result of the last instruction
 */
-struct Registers {
+struct CpuRegisters {
     a: u16,
     b: u16,
+    c: u16,
+    d: u16,
     res: u16,
 }
 
-#[derive(PartialEq)]
-enum Status {
+enum CpuStatus {
     NotStarted,
     Running,
     Exiting,
 }
 struct CpuState {
-    frequency: u32,
+    frequency: u16,
     /** The minimum duration of an instruction cycle */
     cycle_duration: usize,
-    instruction_cache: Vec<CPUInstruction>,
-    instruction_address: usize,
-    registers: Registers,
-    status: Status,
+    status: CpuStatus,
+    instruction_cache: Vec<CpuInstruction>,
+    instruction_pointer: u16,
+    registers: CpuRegisters,
+    memory: MemoryState,
+    function_table: HashMap<&'static str, u16>,
 }
 impl CpuState {
-    fn new(frequency: u32) -> CpuState {
+    fn new(frequency: u16) -> CpuState {
         let mut cpu_state = CpuState {
             frequency: 0,
             cycle_duration: 0,
+            status: CpuStatus::NotStarted,
             instruction_cache: vec![],
-            instruction_address: 0,
+            instruction_pointer: 0,
             registers: Default::default(),
-            status: Status::NotStarted,
+            memory: MemoryState::default(),
+            function_table: HashMap::new(),
         };
         // Important for consistent pacing of CPU cycles
         cpu_state.update_frequency(frequency);
@@ -78,7 +104,7 @@ impl CpuState {
         cpu_state
     }
 
-    fn update_frequency(&mut self, new_frequency: u32) {
+    fn update_frequency(&mut self, new_frequency: u16) {
         self.frequency = new_frequency;
         self.cycle_duration = 1000 / new_frequency as usize;
     }
@@ -100,34 +126,56 @@ impl CpuState {
         }
     }
 
-    fn append_instructions(&mut self, instructions: &[CPUInstruction]) {
+    fn register_functions(&mut self, instructions: &[CpuInstruction]) {
+        instructions
+            .iter()
+            .enumerate()
+            .for_each(|(i, instruction)| {
+                if let CpuInstruction::Fn(fn_name) = instruction {
+                    self.function_table.insert(fn_name, i as u16);
+                }
+            });
+    }
+
+    fn append_instructions(&mut self, instructions: &[CpuInstruction]) {
+        self.register_functions(instructions);
         self.instruction_cache.append(&mut instructions.to_owned());
     }
 
     fn fetch_argument_value(&self, argument: InstructionArgument) -> u16 {
         match argument {
+            InstructionArgument::Stack(address) => {
+                self.memory.get_current_sub_stack().data[address as usize]
+            }
             InstructionArgument::Register(register_name) => *self.get_register(register_name),
             InstructionArgument::Value(value) => value,
         }
     }
 
-    fn handle_instruction(&mut self, instruction: CPUInstruction) {
+    fn handle_instruction(&mut self, instruction: CpuInstruction) {
         match instruction {
-            CPUInstruction::Add(a, b) => {
+            CpuInstruction::Add(a, b) => {
                 let a = self.fetch_argument_value(a);
                 let b = self.fetch_argument_value(b);
 
                 self.registers.res = a + b
             }
-            CPUInstruction::Sub(a, b) => {
+            CpuInstruction::Sub(a, b) => {
                 let a = self.fetch_argument_value(a);
                 let b = self.fetch_argument_value(b);
 
                 self.registers.res = a - b
             }
-            CPUInstruction::Mov(from, to) => {
+            CpuInstruction::Mov(from, to) => {
                 let from = self.fetch_argument_value(from);
                 match to {
+                    InstructionArgument::Stack(address) => {
+                        let current_sub_stack = self.memory.get_current_sub_stack_mut();
+                        // while current_sub_stack {
+
+                        // }
+                        current_sub_stack.data[address as usize] = from;
+                    }
                     InstructionArgument::Register(register_name) => {
                         let register = self.get_register_mut(register_name);
 
@@ -140,53 +188,67 @@ impl CpuState {
                     }
                 };
             }
-            CPUInstruction::Goto(new_address) => self.instruction_address = new_address,
-            CPUInstruction::If(boolean, first_address, second_address) => {
-                let boolean = self.fetch_argument_value(boolean);
-
-                if boolean >= 1 {
-                    self.instruction_address = first_address;
-                } else {
-                    self.instruction_address = second_address;
-                }
-            }
-            CPUInstruction::Eq(first, second) => {
+            CpuInstruction::Eq(first, second) => {
                 let first = self.fetch_argument_value(first);
                 let second = self.fetch_argument_value(second);
 
                 self.registers.res = (first == second) as u16
             }
-            CPUInstruction::Exit() => self.status = Status::Exiting,
+            CpuInstruction::Fn(_) => {}
+            CpuInstruction::Ret() => {
+                let return_address = self.memory.get_current_sub_stack().return_address;
+                self.memory.rewind_stack();
+                self.instruction_pointer = return_address;
+            }
+            CpuInstruction::Call(fn_name) => {
+                self.memory.create_new_sub_stack(self.instruction_pointer);
+                self.instruction_pointer = *self.function_table.get(fn_name).unwrap();
+            }
+            CpuInstruction::Goto(new_address) => {
+                self.instruction_pointer = new_address;
+            }
+            CpuInstruction::If(boolean, first, second) => {
+                let boolean = self.fetch_argument_value(boolean);
+
+                if boolean >= 1 {
+                    self.handle_instruction(*first);
+                } else {
+                    self.handle_instruction(*second);
+                }
+            }
+            CpuInstruction::Exit() => self.status = CpuStatus::Exiting,
         }
     }
 
     fn execute(mut self) {
-        let mut total_instructions = 0;
+        if !self.function_table.contains_key("main") {
+            panic!("No \"main\" function detected, cannot execute program");
+        } else {
+            self.append_instructions(&[CpuInstruction::Call("main")]);
+            self.instruction_pointer = (self.instruction_cache.len() - 1) as u16;
+        }
 
         let start = std::time::Instant::now();
         loop {
-            if self.instruction_address >= self.instruction_cache.len() {
+            if self.instruction_pointer as usize >= self.instruction_cache.len() {
                 break;
-            } else if let Status::Exiting = self.status {
+            } else if let CpuStatus::Exiting = self.status {
                 break;
             }
 
             let instruction_start = std::time::Instant::now();
             // Simulate one CPU instruction
-            let current_instruction = self.instruction_cache[self.instruction_address];
-            self.handle_instruction(current_instruction);
-            println!("{}: {}", self.instruction_address, self.registers.res);
+            let current_instruction =
+                self.instruction_cache[self.instruction_pointer as usize].clone();
+            self.handle_instruction(current_instruction.clone());
+            // println!(
+            //     "{:#?}",
+            //     self.instruction_cache[self.instruction_pointer as usize]
+            // );
+            println!("{}: {}", self.instruction_pointer, self.registers.res);
 
-            match current_instruction {
-                CPUInstruction::Goto(_) | CPUInstruction::If(_, _, _) => {}
-                _ => {
-                    // Increment the instruction address
-                    self.instruction_address += 1;
-                }
-            }
-
-            // Increment the total amount of instructions executed
-            total_instructions += 1;
+            // Increment the instruction address
+            self.instruction_pointer += 1;
 
             // Sleep to maintain CPU frequency
             let elapsed = instruction_start.elapsed().as_millis_f64();
@@ -197,7 +259,7 @@ impl CpuState {
             }
         }
         println!(
-            "Completed {total_instructions} CPU instructions in {} seconds",
+            "Completed all CPU instructions in {} seconds",
             start.elapsed().as_secs_f64()
         );
     }
@@ -207,19 +269,24 @@ fn main() {
     let mut cpu = CpuState::new(100);
 
     let instructions = vec![
-        CPUInstruction::Add(
+        CpuInstruction::Fn("main"),
+        CpuInstruction::Add(
             InstructionArgument::Register("a"),
             InstructionArgument::Value(1),
         ),
-        CPUInstruction::Mov(
+        CpuInstruction::Mov(
             InstructionArgument::Register("res"),
-            InstructionArgument::Register("a"),
+            InstructionArgument::Stack(0),
         ),
-        CPUInstruction::Eq(
-            InstructionArgument::Register("a"),
+        CpuInstruction::Eq(
+            InstructionArgument::Stack(0),
             InstructionArgument::Value(10),
         ),
-        CPUInstruction::If(InstructionArgument::Register("res"), 100, 0),
+        CpuInstruction::If(
+            InstructionArgument::Register("res"),
+            Box::new(CpuInstruction::Ret()),
+            Box::new(CpuInstruction::Goto(0)),
+        ),
     ];
     cpu.append_instructions(&instructions);
     cpu.execute();
