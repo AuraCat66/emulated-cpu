@@ -6,8 +6,8 @@ use memory::MemoryState;
 
 mod memory;
 
-#[derive(Debug)]
-enum Errors {}
+// #[derive(Debug)]
+// enum Errors {}
 
 #[derive(Clone, Copy, Debug)]
 enum InstructionArgument {
@@ -35,9 +35,11 @@ enum CpuInstruction {
     Compares the two values and returns 0 if the comparison is false, 1 if it's true */
     Eq(InstructionArgument, InstructionArgument),
 
-    /** FN function | A function */
+    /** FN function | Declares a function. Does nothing when actually executed */
     Fn(&'static str),
+    /** RET instruction | Returns from the current function */
     Ret(),
+    /** CALL instruction | Calls a function */
     Call(&'static str),
 
     /** GOTO instruction | Jumps to the instruction at the provided address and executes it
@@ -65,8 +67,6 @@ enum CpuInstruction {
 struct CpuRegisters {
     a: u16,
     b: u16,
-    c: u16,
-    d: u16,
     res: u16,
 }
 
@@ -142,9 +142,19 @@ impl CpuState {
         self.instruction_cache.append(&mut instructions.to_owned());
     }
 
-    fn fetch_argument_value(&self, argument: InstructionArgument) -> u16 {
+    fn fetch_argument_value(&mut self, argument: InstructionArgument) -> u16 {
         match argument {
             InstructionArgument::Stack(address) => {
+                if self
+                    .memory
+                    .get_current_sub_stack()
+                    .data
+                    .get(address as usize)
+                    .is_none()
+                {
+                    self.memory.write_data(address, 0);
+                }
+
                 self.memory.get_current_sub_stack().data[address as usize]
             }
             InstructionArgument::Register(register_name) => *self.get_register(register_name),
@@ -170,11 +180,7 @@ impl CpuState {
                 let from = self.fetch_argument_value(from);
                 match to {
                     InstructionArgument::Stack(address) => {
-                        let current_sub_stack = self.memory.get_current_sub_stack_mut();
-                        // while current_sub_stack {
-
-                        // }
-                        current_sub_stack.data[address as usize] = from;
+                        self.memory.write_data(address, from);
                     }
                     InstructionArgument::Register(register_name) => {
                         let register = self.get_register_mut(register_name);
@@ -270,10 +276,7 @@ fn main() {
 
     let instructions = vec![
         CpuInstruction::Fn("main"),
-        CpuInstruction::Add(
-            InstructionArgument::Register("a"),
-            InstructionArgument::Value(1),
-        ),
+        CpuInstruction::Add(InstructionArgument::Stack(0), InstructionArgument::Value(1)),
         CpuInstruction::Mov(
             InstructionArgument::Register("res"),
             InstructionArgument::Stack(0),

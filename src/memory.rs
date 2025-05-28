@@ -26,6 +26,17 @@ impl MemoryState {
         &mut self.stack[0]
     }
 
+    pub fn write_data(&mut self, address: u16, data: u16) {
+        let current_sub_stack = self.get_current_sub_stack_mut();
+
+        if current_sub_stack.data.get(address as usize).is_none() {
+            while current_sub_stack.data.get(address as usize).is_none() {
+                current_sub_stack.data.push(0);
+            }
+        }
+        current_sub_stack.data[address as usize] = data;
+    }
+
     pub fn rewind_stack(&mut self) {
         self.stack.remove(0);
     }
