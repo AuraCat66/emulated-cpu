@@ -67,6 +67,8 @@ enum CpuInstruction {
 struct CpuRegisters {
     a: u16,
     b: u16,
+    c: u16,
+    d: u16,
     res: u16,
 }
 
@@ -113,6 +115,8 @@ impl CpuState {
         match register_name {
             "a" => &self.registers.a,
             "b" => &self.registers.b,
+            "c" => &self.registers.c,
+            "d" => &self.registers.d,
             "res" => &self.registers.res,
             _ => panic!("Register {register_name} not found"),
         }
@@ -121,6 +125,8 @@ impl CpuState {
         match register_name {
             "a" => &mut self.registers.a,
             "b" => &mut self.registers.b,
+            "c" => &mut self.registers.c,
+            "d" => &mut self.registers.d,
             "res" => &mut self.registers.res,
             _ => panic!("Register {register_name} not found"),
         }
