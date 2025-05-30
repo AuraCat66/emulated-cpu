@@ -80,7 +80,7 @@ enum CpuStatus {
 struct CpuState {
     frequency: u16,
     /** The minimum duration of an instruction cycle */
-    cycle_duration: usize,
+    cycle_duration: f64,
     status: CpuStatus,
     instruction_cache: Vec<CpuInstruction>,
     instruction_pointer: u16,
@@ -92,7 +92,7 @@ impl CpuState {
     fn new(frequency: u16) -> CpuState {
         let mut cpu_state = CpuState {
             frequency: 0,
-            cycle_duration: 0,
+            cycle_duration: 0.,
             status: CpuStatus::NotStarted,
             instruction_cache: vec![],
             instruction_pointer: 0,
@@ -108,7 +108,7 @@ impl CpuState {
 
     fn update_frequency(&mut self, new_frequency: u16) {
         self.frequency = new_frequency;
-        self.cycle_duration = 1000 / new_frequency as usize;
+        self.cycle_duration = 1000. / new_frequency as f64;
     }
 
     fn get_register(&self, register_name: &'static str) -> &u16 {
@@ -264,7 +264,7 @@ impl CpuState {
 
             // Sleep to maintain CPU frequency
             let elapsed = instruction_start.elapsed().as_millis_f64();
-            let expected = self.cycle_duration as f64;
+            let expected = self.cycle_duration;
             if elapsed < expected {
                 let sleep_duration = expected - elapsed;
                 std::thread::sleep(std::time::Duration::from_millis(sleep_duration as u64));
@@ -289,7 +289,7 @@ fn main() {
         ),
         CpuInstruction::Eq(
             InstructionArgument::Stack(0),
-            InstructionArgument::Value(10),
+            InstructionArgument::Value(100),
         ),
         CpuInstruction::If(
             InstructionArgument::Register("res"),
